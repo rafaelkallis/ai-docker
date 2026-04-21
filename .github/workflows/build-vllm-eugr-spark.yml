@@ -22,6 +22,7 @@ jobs:
     outputs:
       new_commit: ${{ steps.check_commit.outputs.new }}
       new_release: ${{ steps.check_release.outputs.new }}
+      release_id: ${{ steps.check_release.outputs.id }}
       release_tag: ${{ steps.check_release.outputs.tag }}
     steps:
       - name: Checkout ${{ github.repository }}
@@ -41,11 +42,14 @@ jobs:
       - name: Check if new release
         id: check_release
         run: |
-          UPSTREAM_RELEASE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r '.tag_name')
-          LOCAL_RELEASE=$(cat vllm-eugr-spark/.upstream-release 2>/dev/null || echo "none")
-          if [ "$UPSTREAM_RELEASE" != "$LOCAL_RELEASE" ] && [ "$UPSTREAM_RELEASE" != "null" ] && [ -n "$UPSTREAM_RELEASE" ]; then
+          UPSTREAM_RELEASE_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest)
+          UPSTREAM_RELEASE_ID=$(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.id')
+          UPSTREAM_RELEASE_TAG=$(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.tag_name')
+          LOCAL_RELEASE_ID=$(cat vllm-eugr-spark/.upstream-release 2>/dev/null || echo "0")
+          if [ "$UPSTREAM_RELEASE_ID" != "$LOCAL_RELEASE_ID" ] && [ "$UPSTREAM_RELEASE_ID" != "null" ] && [ -n "$UPSTREAM_RELEASE_ID" ]; then
             echo "new=true" >> $GITHUB_OUTPUT
-            echo "tag=$UPSTREAM_RELEASE" >> $GITHUB_OUTPUT
+            echo "id=$UPSTREAM_RELEASE_ID" >> $GITHUB_OUTPUT
+            echo "tag=$UPSTREAM_RELEASE_TAG" >> $GITHUB_OUTPUT
           else
             echo "new=false" >> $GITHUB_OUTPUT
             echo "tag=" >> $GITHUB_OUTPUT
@@ -146,9 +150,10 @@ jobs:
         run: |
           UPSTREAM_COMMIT=$(git -C upstream-repo rev-parse HEAD)
           echo $UPSTREAM_COMMIT > vllm-eugr-spark/.upstream-commit
+          RELEASE_ID="${{ needs.check_upstream_updates.outputs.release_id }}"
           RELEASE_TAG="${{ needs.check_upstream_updates.outputs.release_tag }}"
-          if [ -n "$RELEASE_TAG" ]; then
-            echo $RELEASE_TAG > vllm-eugr-spark/.upstream-release
+          if [ -n "$RELEASE_ID" ]; then
+            echo $RELEASE_ID > vllm-eugr-spark/.upstream-release
           fi
           git config user.name "${{ github.repository_owner }}"
           git config user.email "${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com"

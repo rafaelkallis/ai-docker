@@ -20,13 +20,15 @@ jobs:
   check_upstream_updates:
     runs-on: ubuntu-24.04
     outputs:
-      new: ${{ steps.check.outputs.new }}
+      new_commit: ${{ steps.check_commit.outputs.new }}
+      new_release: ${{ steps.check_release.outputs.new }}
+      release_tag: ${{ steps.check_release.outputs.tag }}
     steps:
       - name: Checkout ${{ github.repository }}
         uses: actions/checkout@v6
 
-      - name: Check if new release
-        id: check
+      - name: Check if new commit
+        id: check_commit
         run: |
           UPSTREAM_COMMIT=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }} | jq -r '.commit.sha')
           LOCAL_COMMIT=$(cat vllm-eugr-spark/.upstream-commit 2>/dev/null || echo "none")
@@ -36,10 +38,23 @@ jobs:
             echo "new=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check if new release
+        id: check_release
+        run: |
+          UPSTREAM_RELEASE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r '.tag_name')
+          LOCAL_RELEASE=$(cat vllm-eugr-spark/.upstream-release 2>/dev/null || echo "none")
+          if [ "$UPSTREAM_RELEASE" != "$LOCAL_RELEASE" ] && [ "$UPSTREAM_RELEASE" != "null" ] && [ -n "$UPSTREAM_RELEASE" ]; then
+            echo "new=true" >> $GITHUB_OUTPUT
+            echo "tag=$UPSTREAM_RELEASE" >> $GITHUB_OUTPUT
+          else
+            echo "new=false" >> $GITHUB_OUTPUT
+            echo "tag=" >> $GITHUB_OUTPUT
+          fi
+
   build_and_push:
     runs-on: ubuntu-24.04-arm
     needs: check_upstream_updates
-    if: needs.check_upstream_updates.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.check_upstream_updates.outputs.new_commit == 'true' || needs.check_upstream_updates.outputs.new_release == 'true' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       packages: write
@@ -88,16 +103,26 @@ jobs:
         run: |
           echo "versioned=${{ env.IMAGE_NAME }}:v${{ github.run_number }}-${{ steps.dependency-versions.outputs.eugr-ref }}" >> $GITHUB_OUTPUT
           echo "upstream-branch=${{ env.IMAGE_NAME }}:${{ env.UPSTREAM_BRANCH }}" >> $GITHUB_OUTPUT
+          RELEASE_TAG="${{ needs.check_upstream_updates.outputs.release_tag }}"
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "release=${{ env.IMAGE_NAME }}:${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          fi
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Build vLLM Spark image
         run: |
+          RELEASE_TAG="${{ needs.check_upstream_updates.outputs.release_tag }}"
+          RELEASE_TAG_ARG=""
+          if [ -n "$RELEASE_TAG" ]; then
+            RELEASE_TAG_ARG="--tag ${{ env.IMAGE_NAME }}:${RELEASE_TAG}"
+          fi
           docker build \
             --file vllm-eugr-spark/Dockerfile \
             --build-arg BASE_IMAGE=vllm \
             --platform linux/arm64 \
             --tag ${{ steps.tags.outputs.versioned }} \
             --tag ${{ steps.tags.outputs.upstream-branch }} \
+            $RELEASE_TAG_ARG \
             --label "org.opencontainers.image.title=vLLM Spark" \
             --label "org.opencontainers.image.version=${{ github.run_number }}" \
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
@@ -113,15 +138,22 @@ jobs:
         run: |
           docker push ${{ steps.tags.outputs.versioned }}
           docker push ${{ steps.tags.outputs.upstream-branch }}
+          if [ -n "${{ steps.tags.outputs.release }}" ]; then
+            docker push ${{ steps.tags.outputs.release }}
+          fi
         
       - name: Update upstream commit reference
         run: |
           UPSTREAM_COMMIT=$(git -C upstream-repo rev-parse HEAD)
           echo $UPSTREAM_COMMIT > vllm-eugr-spark/.upstream-commit
+          RELEASE_TAG="${{ needs.check_upstream_updates.outputs.release_tag }}"
+          if [ -n "$RELEASE_TAG" ]; then
+            echo $RELEASE_TAG > vllm-eugr-spark/.upstream-release
+          fi
           git config user.name "${{ github.repository_owner }}"
           git config user.email "${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com"
-          git add vllm-eugr-spark/.upstream-commit
-          git commit -m "Update upstream commit reference to ${UPSTREAM_COMMIT}" || echo "No changes to commit"
+          git add vllm-eugr-spark/.upstream-commit vllm-eugr-spark/.upstream-release
+          git commit -m "Update upstream references (commit: ${UPSTREAM_COMMIT}${RELEASE_TAG:+, release: ${RELEASE_TAG}})" || echo "No changes to commit"
           git push origin HEAD:${GITHUB_REF#refs/heads/}
 
       - name: Write job summary
@@ -129,6 +161,9 @@ jobs:
         run: |
           echo "## Built image" >> $GITHUB_STEP_SUMMARY
           echo "- **Versioned**: \`${{ steps.tags.outputs.versioned }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.tags.outputs.release }}" ]; then
+            echo "- **Release**: \`${{ steps.tags.outputs.release }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "- **${{ env.UPSTREAM_REPO }} ref**: \`${{ steps.dependency-versions.outputs.eugr-ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **vLLM version**: \`${{ steps.dependency-versions.outputs.vllm-version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **FlashInfer version**: \`${{ steps.dependency-versions.outputs.flashinfer-version }}\`" >> $GITHUB_STEP_SUMMARY

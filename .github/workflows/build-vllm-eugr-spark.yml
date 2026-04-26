@@ -30,7 +30,11 @@ jobs:
       - name: Check if new commit
         id: check_commit
         run: |
-          UPSTREAM_COMMIT=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }} | jq -r '.commit.sha')
+          UPSTREAM_COMMIT=$(curl -s -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }} | jq -r '.commit.sha')
+          if [ -z "$UPSTREAM_COMMIT" ] || [ "$UPSTREAM_COMMIT" = "null" ]; then
+            echo "::error::Failed to fetch upstream commit SHA (empty or null response)"
+            exit 1
+          fi
           LOCAL_COMMIT=$(cat vllm-eugr-spark/.upstream-commit 2>/dev/null || echo "none")
           if [ "$UPSTREAM_COMMIT" != "$LOCAL_COMMIT" ]; then
             echo "new=true" >> $GITHUB_OUTPUT
@@ -41,10 +45,18 @@ jobs:
       - name: Check if new release
         id: check_release
         run: |
-          UPSTREAM_RELEASE_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest)
+          UPSTREAM_RELEASE_JSON=$(curl -s -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest)
+          if echo "$UPSTREAM_RELEASE_JSON" | jq -e '.message' > /dev/null 2>&1; then
+            echo "::error::GitHub API returned an error for releases/latest: $(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.message')"
+            exit 1
+          fi
           UPSTREAM_RELEASE_ID=$(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.id')
+          if [ -z "$UPSTREAM_RELEASE_ID" ] || [ "$UPSTREAM_RELEASE_ID" = "null" ]; then
+            echo "::error::Failed to fetch upstream release ID (empty or null response)"
+            exit 1
+          fi
           LOCAL_RELEASE_ID=$(cat vllm-eugr-spark/.upstream-release 2>/dev/null || echo "0")
-          if [ "$UPSTREAM_RELEASE_ID" != "$LOCAL_RELEASE_ID" ] && [ "$UPSTREAM_RELEASE_ID" != "null" ] && [ -n "$UPSTREAM_RELEASE_ID" ]; then
+          if [ "$UPSTREAM_RELEASE_ID" != "$LOCAL_RELEASE_ID" ]; then
             echo "new=true" >> $GITHUB_OUTPUT
             echo "id=$UPSTREAM_RELEASE_ID" >> $GITHUB_OUTPUT
           else

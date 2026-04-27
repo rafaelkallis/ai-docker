@@ -20,15 +20,25 @@ jobs:
   check_upstream_updates:
     runs-on: ubuntu-24.04
     outputs:
-      new: ${{ steps.check.outputs.new }}
+      new_commit: ${{ steps.check_commit.outputs.new }}
+      new_release: ${{ steps.check_release.outputs.new }}
+      release_id: ${{ steps.check_release.outputs.id }}
     steps:
       - name: Checkout ${{ github.repository }}
         uses: actions/checkout@v6
 
-      - name: Check if new release
-        id: check
+      - name: Check if new commit
+        id: check_commit
         run: |
-          UPSTREAM_COMMIT=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }} | jq -r '.commit.sha')
+          if ! UPSTREAM_COMMIT_JSON=$(curl -sS -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }}); then
+            echo "::error::curl failed fetching branch ${{ env.UPSTREAM_BRANCH }} (HTTP error or network failure)"
+            exit 1
+          fi
+          UPSTREAM_COMMIT=$(echo "$UPSTREAM_COMMIT_JSON" | jq -r '.commit.sha')
+          if [ -z "$UPSTREAM_COMMIT" ] || [ "$UPSTREAM_COMMIT" = "null" ]; then
+            echo "::error::Failed to fetch upstream commit SHA (empty or null response)"
+            exit 1
+          fi
           LOCAL_COMMIT=$(cat vllm-eugr-spark/.upstream-commit 2>/dev/null || echo "none")
           if [ "$UPSTREAM_COMMIT" != "$LOCAL_COMMIT" ]; then
             echo "new=true" >> $GITHUB_OUTPUT
@@ -36,10 +46,34 @@ jobs:
             echo "new=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check if new release
+        id: check_release
+        run: |
+          if ! UPSTREAM_RELEASE_JSON=$(curl -sS -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest); then
+            echo "::error::curl failed fetching releases/latest (HTTP error or network failure)"
+            exit 1
+          fi
+          if echo "$UPSTREAM_RELEASE_JSON" | jq -e '.message' > /dev/null 2>&1; then
+            echo "::error::GitHub API returned an error for releases/latest: $(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.message')"
+            exit 1
+          fi
+          UPSTREAM_RELEASE_ID=$(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.id')
+          if [ -z "$UPSTREAM_RELEASE_ID" ] || [ "$UPSTREAM_RELEASE_ID" = "null" ]; then
+            echo "::error::Failed to fetch upstream release ID (empty or null response)"
+            exit 1
+          fi
+          LOCAL_RELEASE_ID=$(cat vllm-eugr-spark/.upstream-release 2>/dev/null || echo "0")
+          if [ "$UPSTREAM_RELEASE_ID" != "$LOCAL_RELEASE_ID" ]; then
+            echo "new=true" >> $GITHUB_OUTPUT
+            echo "id=$UPSTREAM_RELEASE_ID" >> $GITHUB_OUTPUT
+          else
+            echo "new=false" >> $GITHUB_OUTPUT
+          fi
+
   build_and_push:
     runs-on: ubuntu-24.04-arm
     needs: check_upstream_updates
-    if: needs.check_upstream_updates.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.check_upstream_updates.outputs.new_commit == 'true' || needs.check_upstream_updates.outputs.new_release == 'true' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       packages: write
@@ -118,10 +152,14 @@ jobs:
         run: |
           UPSTREAM_COMMIT=$(git -C upstream-repo rev-parse HEAD)
           echo $UPSTREAM_COMMIT > vllm-eugr-spark/.upstream-commit
+          RELEASE_ID="${{ needs.check_upstream_updates.outputs.release_id }}"
+          if [ -n "$RELEASE_ID" ]; then
+            echo $RELEASE_ID > vllm-eugr-spark/.upstream-release
+          fi
           git config user.name "${{ github.repository_owner }}"
           git config user.email "${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com"
-          git add vllm-eugr-spark/.upstream-commit
-          git commit -m "Update upstream commit reference to ${UPSTREAM_COMMIT}" || echo "No changes to commit"
+          git add vllm-eugr-spark/.upstream-commit vllm-eugr-spark/.upstream-release
+          git commit -m "Update upstream references (commit: ${UPSTREAM_COMMIT}${RELEASE_ID:+, release-id: ${RELEASE_ID}})" || echo "No changes to commit"
           git push origin HEAD:${GITHUB_REF#refs/heads/}
 
       - name: Write job summary

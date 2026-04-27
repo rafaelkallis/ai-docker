@@ -30,7 +30,11 @@ jobs:
       - name: Check if new commit
         id: check_commit
         run: |
-          UPSTREAM_COMMIT=$(curl -s -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }} | jq -r '.commit.sha')
+          if ! UPSTREAM_COMMIT_JSON=$(curl -sS -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/branches/${{ env.UPSTREAM_BRANCH }}); then
+            echo "::error::curl failed fetching branch ${{ env.UPSTREAM_BRANCH }} (HTTP error or network failure)"
+            exit 1
+          fi
+          UPSTREAM_COMMIT=$(echo "$UPSTREAM_COMMIT_JSON" | jq -r '.commit.sha')
           if [ -z "$UPSTREAM_COMMIT" ] || [ "$UPSTREAM_COMMIT" = "null" ]; then
             echo "::error::Failed to fetch upstream commit SHA (empty or null response)"
             exit 1
@@ -45,7 +49,10 @@ jobs:
       - name: Check if new release
         id: check_release
         run: |
-          UPSTREAM_RELEASE_JSON=$(curl -s -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest)
+          if ! UPSTREAM_RELEASE_JSON=$(curl -sS -f -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest); then
+            echo "::error::curl failed fetching releases/latest (HTTP error or network failure)"
+            exit 1
+          fi
           if echo "$UPSTREAM_RELEASE_JSON" | jq -e '.message' > /dev/null 2>&1; then
             echo "::error::GitHub API returned an error for releases/latest: $(echo "$UPSTREAM_RELEASE_JSON" | jq -r '.message')"
             exit 1

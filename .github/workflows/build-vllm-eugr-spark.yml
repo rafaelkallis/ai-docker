@@ -122,7 +122,7 @@ jobs:
         run: |
           DATE=$(date -u +%Y-%m-%d)
           echo "dated=${{ env.IMAGE_NAME }}:${DATE}" >> $GITHUB_OUTPUT
-          echo "versioned=${{ env.IMAGE_NAME }}:${DATE}-${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "versioned=${{ env.IMAGE_NAME }}:${DATE}-v${{ github.run_number }}" >> $GITHUB_OUTPUT
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Build vLLM Spark image

@@ -120,8 +120,9 @@ jobs:
       - name: Set image tags
         id: tags
         run: |
-          echo "versioned=${{ env.IMAGE_NAME }}:v${{ github.run_number }}-${{ steps.dependency-versions.outputs.eugr-ref }}" >> $GITHUB_OUTPUT
-          echo "upstream-branch=${{ env.IMAGE_NAME }}:${{ env.UPSTREAM_BRANCH }}" >> $GITHUB_OUTPUT
+          DATE=$(date -u +%Y-%m-%d)
+          echo "dated=${{ env.IMAGE_NAME }}:${DATE}" >> $GITHUB_OUTPUT
+          echo "versioned=${{ env.IMAGE_NAME }}:${DATE}-${{ github.run_number }}" >> $GITHUB_OUTPUT
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Build vLLM Spark image
@@ -131,7 +132,7 @@ jobs:
             --build-arg BASE_IMAGE=vllm \
             --platform linux/arm64 \
             --tag ${{ steps.tags.outputs.versioned }} \
-            --tag ${{ steps.tags.outputs.upstream-branch }} \
+            --tag ${{ steps.tags.outputs.dated }} \
             --label "org.opencontainers.image.title=vLLM Spark" \
             --label "org.opencontainers.image.version=${{ github.run_number }}" \
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
@@ -146,7 +147,7 @@ jobs:
       - name: Push the image to the Container registry
         run: |
           docker push ${{ steps.tags.outputs.versioned }}
-          docker push ${{ steps.tags.outputs.upstream-branch }}
+          docker push ${{ steps.tags.outputs.dated }}
         
       - name: Update upstream commit reference
         run: |
@@ -167,6 +168,7 @@ jobs:
         run: |
           echo "## Built image" >> $GITHUB_STEP_SUMMARY
           echo "- **Versioned**: \`${{ steps.tags.outputs.versioned }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dated**: \`${{ steps.tags.outputs.dated }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **${{ env.UPSTREAM_REPO }} ref**: \`${{ steps.dependency-versions.outputs.eugr-ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **vLLM version**: \`${{ steps.dependency-versions.outputs.vllm-version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **FlashInfer version**: \`${{ steps.dependency-versions.outputs.flashinfer-version }}\`" >> $GITHUB_STEP_SUMMARY
